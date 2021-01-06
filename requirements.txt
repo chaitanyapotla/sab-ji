@@ -1,0 +1,7 @@
+pyhumps
+fastapi
+uvicorn
+pytest
+fastapi-sqlalchemy
+pydantic
+psycopg2
