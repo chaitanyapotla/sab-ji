@@ -1,6 +1,6 @@
 import uvicorn
 import datetime
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Response, status
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String, Date
 from sqlalchemy.ext.declarative import declarative_base
@@ -30,7 +30,7 @@ class SubscriptionModel(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_name = Column(String, unique=True, index=True)
-    plan_id = Column(String,)
+    plan_id = Column(String, )
     start_date = Column(Date)
 
 
@@ -53,6 +53,7 @@ class UserSchema(BaseModel):
 
     class Config:
         orm_mode = True
+
 
 class SubscriptionSchema(BaseModel):
     user_name: str
@@ -81,8 +82,8 @@ async def get_user(user_name: str, db: Session = Depends(get_db)):
     return _user
 
 
-@app.post("/subscription/", response_model=SubscriptionSchema)
-async def new_subscription(subscription=SubscriptionSchema, db: Session = Depends(get_db)):
+@app.post("/subscription", status_code=200)
+def new_subscription(subscription=SubscriptionSchema, db: Session = Depends(get_db)):
     status = "SUCCESS"
     amount = 0.0
     try:
@@ -94,6 +95,7 @@ async def new_subscription(subscription=SubscriptionSchema, db: Session = Depend
         amount = plan_cost[subscription.plan_id]
         return {"status": status, "amount": "-" + str(amount)}
     except Exception as e:
+        Response.status_code = status.HTTP_400_BAD_REQUEST
         return {"status": str(e), "amount": "-" + str(amount)}
 
 
@@ -112,6 +114,59 @@ def check_for_date(start_date):
         datetime.datetime.strptime(start_date, '%Y-%m-%d')
     except ValueError:
         raise ValueError("Incorrect data format, should be YYYY-MM-DD")
+
+
+@app.get("/subscription/{user_name}/{date}", response_model=SubscriptionSchema)
+async def get_subscription(user_name: str, date: str, response: Response):
+    try:
+        if date:
+            check_for_date(date)
+            return get_all_subscription(user_name, date)
+        else:
+            return get_all_subscription(user_name)
+    except ValueError as e:
+        response.status_code = status.HTTP_400_BAD_REQUEST
+        return str(e)
+    except Exception as e:
+        response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+        return str(e)
+
+
+def get_all_subscription(user_name, start_date=None):
+    db = get_db()
+    subscriptions = []
+    if start_date:
+        _subscriptions = db.query(SubscriptionModel).filter_by(user_name=user_name).filter_by(start_date=start_date)
+        for _subscription in _subscriptions:
+            subscription = {"plan_id": _subscription.plan_id,
+                            "days_left": get_days_left(_subscription.plan_id, _subscription.start_date)}
+            subscriptions.push(subscription)
+    else:
+        _subscriptions = db.query(SubscriptionModel).filter_by(user_name=user_name)
+        for _subscription in _subscriptions:
+            subscription = {"plan_id": _subscription.plan_id, "start_date": _subscription.start_date,
+                            "valid_till": get_valid_till(_subscription.plan_id, _subscription.start_date)}
+            subscriptions.push(subscription)
+    return subscriptions
+
+
+def get_valid_till(plan_id, start_date):
+    number_of_days = plan_validity[plan_id]
+    valid_till = (
+                datetime.datetime.strptime(start_date, "%Y-%m-%d") + datetime.timedelta(days=number_of_days)).strftime(
+        "%Y-%m-%d")
+    return valid_till
+
+
+def get_days_left(plan_id, start_date):
+    number_of_days = plan_validity[plan_id]
+    current_date = datetime.today().strftime('%Y-%m-%d')
+    difference = abs((datetime.strptime(start_date, "%Y-%m-%d") - current_date).days)
+    if difference <= number_of_days:
+        days_left = number_of_days - difference
+    else:
+        days_left = "Expired"
+    return days_left
 
 
 if __name__ == "__main__":
